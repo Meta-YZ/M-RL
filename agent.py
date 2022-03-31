@@ -16,11 +16,11 @@ class Agent:
         self.device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
 
         # Q-Network
-        self.q_net = DQN(state_size, action_size, hidden_size).to(self.device)
+        self.q_local = DQN(state_size, action_size, hidden_size).to(self.device)
         self.q_target = DQN(state_size, action_size, hidden_size).to(self.device)
 
         # optimizer
-        self.optimizer = optim.Adam(self.q_net.parameters(), lr=config.lr)
+        self.optimizer = optim.Adam(self.q_local.parameters(), lr=config.lr)
 
         # ReplayBuffer
         self.buffer = ReplayBuffer(action_size, buffer_size=config.buffer_size, batch_size=config.batch_size)
@@ -51,9 +51,9 @@ class Agent:
         # 根据当前策略返回给定状态的操作，确定性策略，画面每更新4帧多一次动作
         state = np.array(state)
         state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)  # 增加一个维度给batch_size
-        self.q_net.eval()
-        action_values = self.q_net(state).detach()
-        self.q_net.train()
+        self.q_local.eval()
+        action_values = self.q_local(state).detach()
+        self.q_local.train()
 
         # Epsilon-greedy action selection
         if random.random() > epsilon:
@@ -82,39 +82,42 @@ class Agent:
         q_targets_next = self.q_target(next_states).detach()
 
         # 用LogSumExp计算entropy，目的是维持数值的稳定性，详情见博客
-        q_k_targets_next = q_targets_next
-        v_k_targets_next = q_targets_next.max(1)[0].unsqueeze(-1)
-        logSum = torch.logsumexp((q_k_targets_next - v_k_targets_next) / entropy_tau, 1).unsqueeze(-1)
-        tau_log_pi_next = q_k_targets_next - v_k_targets_next - entropy_tau * logSum
+        # q_k_targets_next = q_targets_next
+        v_targets_next = q_targets_next.max(1)[0].unsqueeze(-1)  # Paper为什么不用平均值
+        # q_k_targets_next - v_k_targets_next q_targets_next对q_k_targets_next进行了广播
+        logSum = torch.logsumexp((q_targets_next - v_targets_next) / entropy_tau, 1).unsqueeze(-1)
+        # q_k_targets_next - v_k_targets_next
+        tau_log_pi_next = q_targets_next - v_targets_next - entropy_tau * logSum
 
-        # 目标策略
+        # 目标策略，tau是温度系数，越小的话，不同动作的分布大小差异更大
         pi_target = F.softmax(q_targets_next / entropy_tau, dim=1)
 
         # q_targets的计算
-        q_targets = (gamma * (pi_target * (q_targets_next - tau_log_pi_next) * (1-dones)).sum(1)).unsqueeze(-1)
+        q_soft_targets = (gamma * (pi_target * (q_targets_next - tau_log_pi_next) * (1-dones)).sum(1)).unsqueeze(-1)
 
-        # 用logSum计算munchausen的addon
-        q_k_targets = self.q_target(states).detach()
-        v_k_targets = q_k_targets.max(1)[0].unsqueeze(-1)
-        logSum = torch.logsumexp((q_k_targets - v_k_targets) / entropy_tau, 1).unsqueeze(-1)
-        tau_log_pi = q_k_targets - v_k_targets - entropy_tau * logSum
+        # 用logSum计算munchausen的addon, 这里的q_k_targets是预测当前的states的值，而不是next_states
+        # q_targets对q_k_targets进行了广播
+        q_targets = self.q_target(states).detach()
+        v_targets = q_targets.max(1)[0].unsqueeze(-1)
+        logSum = torch.logsumexp((q_targets - v_targets) / entropy_tau, 1).unsqueeze(-1)
+        tau_log_pi = q_targets - v_targets - entropy_tau * logSum
         munchausen_addon = tau_log_pi.gather(1, actions.long())
 
         # 计算munchausen reward
         munchausen_reward = rewards + alpha * torch.clamp(munchausen_addon, min=-1, max=0)
-        q_targets = q_targets + munchausen_reward
+        q_targets = munchausen_reward + q_soft_targets
 
         # 用当前的状态去估计/预测Q值
-        q_expected = self.q_net(states).gather(1, actions.long())
+        q_expected = self.q_local(states).gather(1, actions.long())
 
         # 计算loss,target是我们想去接近的（相当于真实值）
         loss = F.mse_loss(q_expected, q_targets)
         loss.backward()
-        clip_grad_norm_(self.q_net.parameters(), max_norm=self.config.max_grad_norm)
+        clip_grad_norm_(self.q_local.parameters(), max_norm=self.config.max_grad_norm)
         self.optimizer.step()
 
         # 软更新target
-        self.soft_update(self.q_net, self.q_target, self.config.soft_update_tau)
+        self.soft_update(self.q_local, self.q_target, self.config.soft_update_tau)
         return loss.detach().cpu().numpy()
 
     def soft_update(self, local_model, target_model, tau):

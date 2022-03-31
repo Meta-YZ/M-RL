@@ -6,7 +6,7 @@ def get_config():
         description='onpolicy', formatter_class=argparse.RawDescriptionHelpFormatter)
 
     # prepare parameters
-    parser.add_argument("--algorithm", type=str, default='masac')
+    parser.add_argument("--algorithm", type=str, default='m-rl')
     parser.add_argument("--run_num", type=int, default=1)
     parser.add_argument("--n_episodes", default=250, type=int)
     parser.add_argument("--num_threads", default=8, type=int)
@@ -25,7 +25,7 @@ def get_config():
     parser.add_argument("--action_step", type=int, default=int(4), help="every now many frame action")
 
     # replay buffer parameters
-    parser.add_argument("--buffer_size", type=int, default=int(1e5), help="Max length for buffer")
+    parser.add_argument("--buffer_size", type=int, default=int(1e6), help="Max length for buffer")
     parser.add_argument("--batch_size", type=int, default=int(128), help="batch_size大小")
     parser.add_argument("--episode_length", type=int,
                         default=200, help="Max length for any episode")
@@ -50,7 +50,7 @@ def get_config():
     parser.add_argument("--weight_decay", type=float, default=0)
     parser.add_argument("--update_every", type=int, default=1)
 
-    # QR-DQN parameters
+    # M-DQN parameters
     parser.add_argument("--max_grad_norm", type=float, default=10.0,
                         help='max norm of gradients (default: 0.5)')
     parser.add_argument("--entropy_tau", type=float, default=0.03,
